@@ -14,11 +14,18 @@ function Get-BadSuccessorOUPermissions {
     #>
 
     [CmdletBinding()]
-    param ()
+    param (
+		[string]$server = $null
+	)
 
     # Cache for IsExcludedSID to reduce network calls
     $SidCache = @{}
 
+	$adParams = @{}
+	if ($server) {
+		$adParams.Server = "$server"
+	}
+	
     function Test-IsExcludedSID {
         Param ([string]$IdentityReference)
 
@@ -48,7 +55,7 @@ function Get-BadSuccessorOUPermissions {
         return $isExcluded
     }
     
-    $domainSID = (Get-ADDomain).DomainSID.Value
+    $domainSID = (Get-ADDomain @adParams).DomainSID.Value
     $excludedSids = @(
         "$domainSID-512",       # Domain Admins
         "S-1-5-32-544",         # Builtin Administrators
@@ -65,7 +72,7 @@ function Get-BadSuccessorOUPermissions {
     # This will hold the output - every principal that has the required permissions and is not excluded, and on which OUs
     $allowedIdentities = @{}
 
-    $allOUs = Get-ADOrganizationalUnit -Filter * -Properties ntSecurityDescriptor | Select-Object DistinguishedName, ntSecurityDescriptor
+    $allOUs = Get-ADOrganizationalUnit @adParams -Filter * -Properties ntSecurityDescriptor | Select-Object DistinguishedName, ntSecurityDescriptor
 
     foreach ($ou in $allOUs) {     
         foreach ($ace in $ou.ntSecurityDescriptor.Access) {
@@ -86,8 +93,11 @@ function Get-BadSuccessorOUPermissions {
 
             if (-not $allowedIdentities.ContainsKey($identity)) {
                 $allowedIdentities[$identity] = [System.Collections.Generic.List[string]]::new()
+			#Write-Host ($object | Format-Table | Out-String)
             }
+			$object = [ADSI]"LDAP://<SID=$identity>"
             $allowedIdentities[$identity].Add($ou.DistinguishedName)
+            $allowedIdentities[$identity].Add($object.DistinguishedName)
         }
 
         # Check the owner
@@ -104,6 +114,7 @@ function Get-BadSuccessorOUPermissions {
     foreach ($id in $allowedIdentities.Keys) {
         [PSCustomObject]@{
             Identity = $id
+            Name = $allowedIdentities[$id].ToArray()
             OUs      = $allowedIdentities[$id].ToArray()
         }
     }
